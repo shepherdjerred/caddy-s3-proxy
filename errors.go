@@ -70,6 +70,9 @@ var awsErrorCodesMapping = map[string]int{
 	"NoSuchLifecycleConfiguration":                   http.StatusNotFound,
 	"NoSuchUpload":                                   http.StatusNotFound,
 	"NoSuchVersion":                                  http.StatusNotFound,
+	// HeadObject surfaces missing keys as "NotFound" rather than NoSuchKey.
+	// See https://github.com/aws/aws-sdk-go/issues/1208 and related issues.
+	"NotFound":                                       http.StatusNotFound,
 	"NotImplemented":                                 http.StatusNotImplemented,
 	"NotSignedUp":                                    http.StatusForbidden,
 	"OperationAborted":                               http.StatusConflict,

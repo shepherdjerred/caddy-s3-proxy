@@ -468,6 +468,86 @@ func TestProxy(t *testing.T) {
 			expectedCode:         http.StatusOK,
 			expectedResponseText: `{"foo": "bar"}`,
 		},
+		// ---- HEAD support ----
+		{
+			name:                 "HEAD on a simple JSON object",
+			proxy:                S3Proxy{Bucket: bucketName},
+			method:               http.MethodHead,
+			path:                 "/test.json",
+			expectedCode:         http.StatusOK,
+			expectsEmptyResponse: true,
+			expectedHeaders: http.Header{
+				"Content-Type": []string{"application/json"},
+			},
+		},
+		{
+			name:                 "HEAD on missing key returns 404",
+			proxy:                S3Proxy{Bucket: bucketName},
+			method:               http.MethodHead,
+			path:                 "/doesnt-exist",
+			expectedCode:         http.StatusNotFound,
+			expectsEmptyResponse: true,
+		},
+		{
+			name: "HEAD on missing key with 404 error page still has no body",
+			// HEAD must not emit the error page body even when one is
+			// configured for the status code.
+			proxy: S3Proxy{
+				Bucket:           bucketName,
+				ErrorPages:       map[int]string{404: "_404.txt"},
+				DefaultErrorPage: "default_error_page.txt",
+			},
+			method:               http.MethodHead,
+			path:                 "/doesnt-exist",
+			expectedCode:         http.StatusNotFound,
+			expectsEmptyResponse: true,
+		},
+		{
+			name:                 "HEAD on hidden file returns 404",
+			proxy:                S3Proxy{Bucket: bucketName, Hide: []string{"test.json"}},
+			method:               http.MethodHead,
+			path:                 "/test.json",
+			expectedCode:         http.StatusNotFound,
+			expectsEmptyResponse: true,
+		},
+		{
+			name:                 "HEAD serves index.html for directory",
+			proxy:                S3Proxy{Bucket: bucketName, IndexNames: []string{"index.html"}},
+			method:               http.MethodHead,
+			path:                 "/inner/",
+			expectedCode:         http.StatusOK,
+			expectsEmptyResponse: true,
+		},
+		{
+			name:   "HEAD honors If-None-Match (returns 304)",
+			proxy:  S3Proxy{Bucket: bucketName},
+			method: http.MethodHead,
+			path:   "/test.json",
+			headers: http.Header{
+				"If-None-Match": []string{`"a38212e01d6f419c9bd303b304a99e9b"`},
+			},
+			expectedCode:         http.StatusNotModified,
+			expectsEmptyResponse: true,
+		},
+		{
+			name:   "HEAD honors If-None-Match on index (returns 304)",
+			proxy:  S3Proxy{Bucket: bucketName, IndexNames: []string{"index.html"}},
+			method: http.MethodHead,
+			path:   "/inner/",
+			headers: http.Header{
+				"If-None-Match": []string{`"44bacca965de5aef310706cc55c4a7b0"`},
+			},
+			expectedCode:         http.StatusNotModified,
+			expectsEmptyResponse: true,
+		},
+		{
+			name:                 "HEAD on directory without index returns 403",
+			proxy:                S3Proxy{Bucket: bucketName},
+			method:               http.MethodHead,
+			path:                 "/inner/",
+			expectedCode:         http.StatusForbidden,
+			expectsEmptyResponse: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var body io.Reader

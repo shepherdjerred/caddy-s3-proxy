@@ -23,7 +23,7 @@ func TestParseCaddyfile(t *testing.T) {
 				foo
 			}`,
 			shouldErr: true,
-			errString: "Testfile:2 - Error during parsing: foo not a valid s3proxy option",
+			errString: "foo not a valid s3proxy option, at Testfile:2",
 		},
 		testCase{
 			desc: "bucket bad # args",
@@ -31,7 +31,7 @@ func TestParseCaddyfile(t *testing.T) {
 			bucket
 			}`,
 			shouldErr: true,
-			errString: "Testfile:2 - Error during parsing: Wrong argument count or unexpected line ending after 'bucket'",
+			errString: "wrong argument count or unexpected line ending after 'bucket', at Testfile:2",
 		},
 		testCase{
 			desc: "bucket empty string",
@@ -39,7 +39,7 @@ func TestParseCaddyfile(t *testing.T) {
 				bucket ""
 			}`,
 			shouldErr: true,
-			errString: "Testfile:2 - Error during parsing: bucket must be set and not empty",
+			errString: "bucket must be set and not empty, at Testfile:2",
 		},
 		testCase{
 			desc: "bucket missing",
@@ -47,7 +47,7 @@ func TestParseCaddyfile(t *testing.T) {
 				region foo
 			}`,
 			shouldErr: true,
-			errString: "Testfile:3 - Error during parsing: bucket must be set and not empty",
+			errString: "bucket must be set and not empty, at Testfile:3",
 		},
 		testCase{
 			desc: "endpoint bad # args",
@@ -55,7 +55,7 @@ func TestParseCaddyfile(t *testing.T) {
 				endpoint
 			}`,
 			shouldErr: true,
-			errString: "Testfile:2 - Error during parsing: Wrong argument count or unexpected line ending after 'endpoint'",
+			errString: "wrong argument count or unexpected line ending after 'endpoint', at Testfile:2",
 		},
 		testCase{
 			desc: "region bad # args",
@@ -63,7 +63,7 @@ func TestParseCaddyfile(t *testing.T) {
 				region one two
 			}`,
 			shouldErr: true,
-			errString: "Testfile:2 - Error during parsing: Wrong argument count or unexpected line ending after 'one'",
+			errString: "wrong argument count or unexpected line ending after 'one', at Testfile:2",
 		},
 		testCase{
 			desc: "root bad # args",
@@ -71,7 +71,7 @@ func TestParseCaddyfile(t *testing.T) {
 				root one two
 			}`,
 			shouldErr: true,
-			errString: "Testfile:2 - Error during parsing: Wrong argument count or unexpected line ending after 'one'",
+			errString: "wrong argument count or unexpected line ending after 'one', at Testfile:2",
 		},
 		testCase{
 			desc: "errors on invalid HTTP status for errors",
@@ -80,7 +80,7 @@ func TestParseCaddyfile(t *testing.T) {
 				errors invalid "path/to/404.html"
 			}`,
 			shouldErr: true,
-			errString: "Testfile:3 - Error during parsing: 'invalid' is not a valid HTTP status code",
+			errString: "'invalid' is not a valid HTTP status code, at Testfile:3",
 		},
 		testCase{
 			desc: "errors on too many arguments for errors",
@@ -89,7 +89,7 @@ func TestParseCaddyfile(t *testing.T) {
 				errors 403 "path/to/404.html" "what's this?"
 			}`,
 			shouldErr: true,
-			errString: "Testfile:3 - Error during parsing: Wrong argument count or unexpected line ending after 'what's this?'",
+			errString: "wrong argument count or unexpected line ending after 'what's this?', at Testfile:3",
 		},
 		testCase{
 			desc: "endpoint gets set",
@@ -166,7 +166,7 @@ func TestParseCaddyfile(t *testing.T) {
 				hide
 			}`,
 			shouldErr: true,
-			errString: "Testfile:3 - Error during parsing: Wrong argument count or unexpected line ending after 'hide'",
+			errString: "wrong argument count or unexpected line ending after 'hide', at Testfile:3",
 		},
 		testCase{
 			desc: "index test",
@@ -187,7 +187,7 @@ func TestParseCaddyfile(t *testing.T) {
 				index
 			}`,
 			shouldErr: true,
-			errString: "Testfile:3 - Error during parsing: Wrong argument count or unexpected line ending after 'index'",
+			errString: "wrong argument count or unexpected line ending after 'index', at Testfile:3",
 		},
 	}
 

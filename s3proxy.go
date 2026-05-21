@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -361,6 +362,8 @@ func (p S3Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 	switch r.Method {
 	case http.MethodGet:
 		err = p.GetHandler(w, r, fullPath)
+	case http.MethodHead:
+		err = p.HeadHandler(w, r, fullPath)
 	case http.MethodPut:
 		err = p.PutHandler(w, r, fullPath)
 	case http.MethodDelete:
@@ -379,8 +382,10 @@ func (p S3Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 		caddyErr = caddyhttp.Error(http.StatusInternalServerError, err)
 	}
 
-	// If non OK status code - WriteHeader - except for GET method, where we still need to process more
-	if r.Method != http.MethodGet {
+	// If non read-method (i.e. not GET or HEAD) - WriteHeader and return.
+	// Both GET and HEAD continue below so error-pages handling and the
+	// 304/412/416 short-circuits apply uniformly.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		if caddyErr.StatusCode != 0 {
 			w.WriteHeader(caddyErr.StatusCode)
 		}
@@ -404,7 +409,10 @@ func (p S3Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 	if caddyErr.StatusCode != 0 {
 		w.WriteHeader(caddyErr.StatusCode)
 	}
-	if doS3ErrorPage {
+	// HEAD responses must not include a body, so skip the error-page body
+	// rendering even when one would have been served for GET. The status
+	// code above is still appropriate.
+	if doS3ErrorPage && r.Method != http.MethodHead {
 		if err := p.serveErrorPage(w, s3Key); err != nil {
 			// Just log the error as we don't want to swallow the parent error.
 			p.log.Error("error serving error page",
@@ -446,27 +454,34 @@ func (p S3Proxy) GetHandler(w http.ResponseWriter, r *http.Request, fullPath str
 		for _, indexPage := range p.IndexNames {
 			indexPath := path.Join(fullPath, indexPage)
 			obj, err = p.getS3Object(p.Bucket, indexPath, r.Header)
-			caddyErr := convertToCaddyError(err)
-			if err == nil || caddyErr.StatusCode == 304 {
+			if err == nil {
 				// We found an index!
 				isDir = false
 				break
-			} else {
-				logIt := true
-				if aerr, ok := err.(awserr.Error); ok {
-					// Getting no such key here could be rather common
-					// So only log a warning if we get any other type of error
-					if aerr.Code() != s3.ErrCodeNoSuchKey {
-						logIt = false
-					}
+			}
+			// An index lookup that returns 304 IS a successful resolution —
+			// the client's cached copy is current. Surface that immediately
+			// instead of falling through to refetch the directory path (which
+			// would 404 / 403 and discard the user's conditional request).
+			// Fixes lindenlab/caddy-s3-proxy#63.
+			caddyErr := convertToCaddyError(err)
+			if caddyErr.StatusCode == http.StatusNotModified {
+				return caddyErr
+			}
+			logIt := true
+			if aerr, ok := err.(awserr.Error); ok {
+				// Getting no such key here could be rather common
+				// So only log a warning if we get any other type of error
+				if aerr.Code() != s3.ErrCodeNoSuchKey {
+					logIt = false
 				}
-				if logIt {
-					p.log.Warn("error when looking for index",
-						zap.String("bucket", p.Bucket),
-						zap.String("key", fullPath),
-						zap.String("err", err.Error()),
-					)
-				}
+			}
+			if logIt {
+				p.log.Warn("error when looking for index",
+					zap.String("bucket", p.Bucket),
+					zap.String("key", fullPath),
+					zap.String("err", err.Error()),
+				)
 			}
 		}
 	}
@@ -506,6 +521,127 @@ func (p S3Proxy) GetHandler(w http.ResponseWriter, r *http.Request, fullPath str
 	}
 
 	return p.writeResponseFromGetObject(w, obj)
+}
+
+// HeadHandler serves HTTP HEAD requests. It mirrors GetHandler's path
+// resolution (hide-list, directory-index lookup) but uses HeadObject so the
+// object body is never fetched from S3 — only metadata. The response is
+// headers-only, as required by RFC 9110 §9.3.2.
+func (p S3Proxy) HeadHandler(w http.ResponseWriter, r *http.Request, fullPath string) error {
+	if fileHidden(fullPath, p.Hide) {
+		return caddyhttp.Error(http.StatusNotFound, nil)
+	}
+
+	isDir := strings.HasSuffix(fullPath, "/")
+	var head *s3.HeadObjectOutput
+	var err error
+
+	if isDir && len(p.IndexNames) > 0 {
+		for _, indexPage := range p.IndexNames {
+			indexPath := path.Join(fullPath, indexPage)
+			head, err = p.headS3Object(p.Bucket, indexPath, r.Header)
+			if err == nil {
+				isDir = false
+				break
+			}
+			caddyErr := convertToCaddyError(err)
+			if caddyErr.StatusCode == http.StatusNotModified {
+				return caddyErr
+			}
+			logIt := true
+			if aerr, ok := err.(awserr.Error); ok {
+				if aerr.Code() != s3.ErrCodeNoSuchKey && aerr.Code() != "NotFound" {
+					logIt = false
+				}
+			}
+			if logIt {
+				p.log.Warn("error when looking for index",
+					zap.String("bucket", p.Bucket),
+					zap.String("key", fullPath),
+					zap.String("err", err.Error()),
+				)
+			}
+		}
+	}
+
+	if isDir {
+		// HEAD on a directory has no meaningful response — there is no body to
+		// describe. EnableBrowse renders an HTML listing which is body-only;
+		// surface a 403 consistent with GET's behavior.
+		return caddyhttp.Error(http.StatusForbidden, errors.New("can not view a directory"))
+	}
+
+	if head == nil {
+		head, err = p.headS3Object(p.Bucket, fullPath, r.Header)
+	}
+	if err != nil {
+		caddyErr := convertToCaddyError(err)
+		if caddyErr.StatusCode == http.StatusNotFound {
+			p.log.Debug("not found",
+				zap.String("bucket", p.Bucket),
+				zap.String("key", fullPath),
+				zap.String("err", caddyErr.Error()),
+			)
+		} else {
+			p.log.Error("failed to head object",
+				zap.String("bucket", p.Bucket),
+				zap.String("key", fullPath),
+				zap.String("err", caddyErr.Error()),
+			)
+		}
+		return caddyErr
+	}
+
+	return p.writeResponseFromHeadObject(w, head)
+}
+
+func (p S3Proxy) headS3Object(bucket, key string, headers http.Header) (*s3.HeadObjectOutput, error) {
+	in := &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	if v := headers.Get("If-Match"); v != "" {
+		in.IfMatch = aws.String(v)
+	}
+	if v := headers.Get("If-None-Match"); v != "" {
+		in.IfNoneMatch = aws.String(v)
+	}
+	if v := headers.Get("If-Modified-Since"); v != "" {
+		if t, err := time.Parse(http.TimeFormat, v); err == nil {
+			in.IfModifiedSince = aws.Time(t)
+		}
+	}
+	if v := headers.Get("If-Unmodified-Since"); v != "" {
+		if t, err := time.Parse(http.TimeFormat, v); err == nil {
+			in.IfUnmodifiedSince = aws.Time(t)
+		}
+	}
+
+	p.log.Debug("head from S3",
+		zap.String("bucket", bucket),
+		zap.String("key", key),
+	)
+
+	return p.client.HeadObject(in)
+}
+
+func (p S3Proxy) writeResponseFromHeadObject(w http.ResponseWriter, obj *s3.HeadObjectOutput) error {
+	setStrHeader(w, "Cache-Control", obj.CacheControl)
+	setStrHeader(w, "Content-Disposition", obj.ContentDisposition)
+	setStrHeader(w, "Content-Encoding", obj.ContentEncoding)
+	setStrHeader(w, "Content-Language", obj.ContentLanguage)
+	setStrHeader(w, "Content-Type", obj.ContentType)
+	setStrHeader(w, "ETag", obj.ETag)
+	setStrHeader(w, "Expires", obj.Expires)
+	setTimeHeader(w, "Last-Modified", obj.LastModified)
+	if obj.ContentLength != nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(*obj.ContentLength, 10))
+	}
+	for key, value := range obj.Metadata {
+		setStrHeader(w, key, value)
+	}
+	return nil
 }
 
 func setStrHeader(w http.ResponseWriter, key string, value *string) {
