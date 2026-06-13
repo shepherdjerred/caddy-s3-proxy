@@ -600,3 +600,54 @@ func TestProxy(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteResponseFromGetObjectFullObject(t *testing.T) {
+	p := S3Proxy{}
+	w := httptest.NewRecorder()
+	obj := &s3.GetObjectOutput{
+		ContentType: aws.String("video/mp4"),
+		Body:        io.NopCloser(strings.NewReader("full body")),
+	}
+
+	if err := p.writeResponseFromGetObject(w, obj); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for full object, got %d", w.Code)
+	}
+	if got := w.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Errorf("expected Accept-Ranges: bytes, got %q", got)
+	}
+	if got := w.Body.String(); got != "full body" {
+		t.Errorf("unexpected body %q", got)
+	}
+}
+
+func TestWriteResponseFromGetObjectPartialContent(t *testing.T) {
+	p := S3Proxy{}
+	w := httptest.NewRecorder()
+	obj := &s3.GetObjectOutput{
+		ContentType:  aws.String("video/mp4"),
+		ContentRange: aws.String("bytes 0-99/276000"),
+		Body:         io.NopCloser(strings.NewReader("partial body")),
+	}
+
+	if err := p.writeResponseFromGetObject(w, obj); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if w.Code != http.StatusPartialContent {
+		t.Errorf("expected 206 for range response, got %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Range"); got != "bytes 0-99/276000" {
+		t.Errorf("expected Content-Range to survive WriteHeader ordering, got %q", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "video/mp4" {
+		t.Errorf("expected Content-Type to survive WriteHeader ordering, got %q", got)
+	}
+	if got := w.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Errorf("expected Accept-Ranges: bytes, got %q", got)
+	}
+	if got := w.Body.String(); got != "partial body" {
+		t.Errorf("unexpected body %q", got)
+	}
+}

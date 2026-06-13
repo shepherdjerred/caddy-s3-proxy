@@ -329,6 +329,18 @@ func (p S3Proxy) writeResponseFromGetObject(w http.ResponseWriter, obj *s3.GetOb
 		setStrHeader(w, key, value)
 	}
 
+	// S3 supports byte-range requests and we forward Range headers through,
+	// so advertise that to clients. Safari in particular refuses to play
+	// video from origins that do not support ranges.
+	w.Header().Set("Accept-Ranges", "bytes")
+
+	// When S3 served a partial object (Range request honored), the response
+	// status must be 206 with the Content-Range header set above. This must
+	// happen after all header writes: WriteHeader flushes the header set.
+	if obj.ContentRange != nil && *obj.ContentRange != "" {
+		w.WriteHeader(http.StatusPartialContent)
+	}
+
 	var err error
 	if obj.Body != nil {
 		// io.Copy will set Content-Length
